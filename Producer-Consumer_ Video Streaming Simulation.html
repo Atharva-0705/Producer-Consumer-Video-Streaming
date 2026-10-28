@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Producer-Consumer: Video Streaming Simulation</title>
+<style>
+:root{
+  --bg:#0f1117; --panel:#1a1d27; --slot-empty:#262a38; --accent:#4f8cff;
+  --prod:#3ddc84; --cons:#ff9f43; --danger:#ff5566; --text:#e8eaf0; --muted:#8a90a6;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f4f5f9; --panel:#ffffff; --slot-empty:#e4e7f0; --text:#1a1d27; --muted:#666c80;
+  }
+}
+*{box-sizing:border-box;}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+.wrap{max-width:900px;margin:0 auto;padding:20px 16px 40px;}
+h1{font-size:1.3rem;margin:0 0 4px;}
+p.sub{color:var(--muted);margin:0 0 20px;font-size:0.9rem;}
+.panel{background:var(--panel);border-radius:14px;padding:18px;margin-bottom:16px;}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:16px;}
+button{background:var(--accent);color:white;border:none;border-radius:8px;padding:9px 16px;
+  font-size:0.9rem;cursor:pointer;font-weight:600;}
+button:disabled{opacity:0.4;cursor:not-allowed;}
+button.secondary{background:var(--slot-empty);color:var(--text);}
+label{font-size:0.85rem;color:var(--muted);display:flex;align-items:center;gap:6px;cursor:pointer;}
+.stage{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;}
+.actor{flex:1;min-width:140px;background:var(--slot-empty);border-radius:12px;padding:14px;text-align:center;}
+.actor h3{margin:0 0 6px;font-size:0.95rem;}
+.actor .icon{font-size:2rem;}
+.actor .status{font-size:0.78rem;color:var(--muted);margin-top:4px;min-height:32px;}
+.buffer{flex:2;min-width:260px;}
+.slots{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:10px 0;}
+.slot{width:48px;height:48px;border-radius:8px;background:var(--slot-empty);
+  display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:700;
+  transition:all 0.25s ease;border:2px solid transparent;}
+.slot.filled{background:var(--prod);color:#06230f;}
+.slot.corrupt{background:var(--danger);color:white;animation:shake 0.4s;}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+.bufferlabel{text-align:center;color:var(--muted);font-size:0.8rem;margin-bottom:4px;}
+.banner{text-align:center;font-weight:700;padding:10px;border-radius:8px;margin-top:10px;
+  font-size:0.85rem;opacity:0;transition:opacity 0.2s;min-height:16px;}
+.banner.show{opacity:1;}
+.banner.full{background:rgba(255,85,102,0.15);color:var(--danger);}
+.banner.empty{background:rgba(255,159,67,0.15);color:var(--cons);}
+.banner.race{background:rgba(255,85,102,0.25);color:var(--danger);}
+.log{background:var(--slot-empty);border-radius:10px;padding:10px 14px;height:150px;
+  overflow-y:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:0.76rem;line-height:1.5;}
+.log div{white-space:pre-wrap;word-break:break-word;}
+.log .p{color:var(--prod);} .log .c{color:var(--cons);} .log .r{color:var(--danger);font-weight:700;}
+.stats{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:0.82rem;color:var(--muted);}
+.stats b{color:var(--text);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎬 Producer–Consumer Simulation</h1>
+  <p class="sub">Video streaming: downloader (producer) fills the buffer, player (consumer) drains it.</p>
+
+  <div class="panel controls">
+    <button id="startBtn">▶ Start</button>
+    <button id="pauseBtn" class="secondary" disabled>⏸ Pause</button>
+    <button id="resetBtn" class="secondary">↺ Reset</button>
+    <label><input type="checkbox" id="raceToggle"> Unsafe mode (show race condition)</label>
+    <label>Speed
+      <input type="range" id="speed" min="1" max="3" value="2" step="1">
+    </label>
+  </div>
+
+  <div class="panel stage">
+    <div class="actor">
+      <div class="icon">📡</div>
+      <h3 style="color:var(--prod)">Producer</h3>
+      <div class="status" id="prodStatus">Idle — click Start</div>
+    </div>
+
+    <div class="buffer">
+      <div class="bufferlabel">Buffer (<span id="bufCount">0</span>/<span id="bufMax">6</span>)</div>
+      <div class="slots" id="slots"></div>
+      <div class="banner" id="banner"></div>
+    </div>
+
+    <div class="actor">
+      <div class="icon">📺</div>
+      <h3 style="color:var(--cons)">Consumer</h3>
+      <div class="status" id="consStatus">Idle — click Start</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="log" id="log"></div>
+    <div class="stats">
+      <span>Downloaded: <b id="statProd">0</b></span>
+      <span>Played: <b id="statCons">0</b></span>
+      <span>Buffer full events: <b id="statFull">0</b></span>
+      <span>Buffer empty events: <b id="statEmpty">0</b></span>
+      <span>Race corruptions: <b id="statRace">0</b></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const BUF_MAX = 6, TOTAL = 20;
+let buffer = [], nextId = 1, playedCount = 0, downloadedCount = 0;
+let fullEvents=0, emptyEvents=0, raceEvents=0;
+let running = false, timer = null;
+let unsafeCounter = 0; // used only in race-condition mode to demonstrate corruption
+
+const slotsEl = document.getElementById('slots');
+const logEl = document.getElementById('log');
+const bannerEl = document.getElementById('banner');
+const prodStatus = document.getElementById('prodStatus');
+const consStatus = document.getElementById('consStatus');
+document.getElementById('bufMax').textContent = BUF_MAX;
+
+for (let i=0;i<BUF_MAX;i++){
+  const d = document.createElement('div');
+  d.className='slot';
+  slotsEl.appendChild(d);
+}
+
+function log(msg, cls){
+  const d = document.createElement('div');
+  if(cls) d.className=cls;
+  d.textContent = msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function renderSlots(flashCorrupt){
+  const slots = slotsEl.children;
+  for(let i=0;i<BUF_MAX;i++){
+    const s = slots[i];
+    s.className = 'slot';
+    if(i < buffer.length){
+      s.classList.add('filled');
+      s.textContent = '#'+buffer[i];
+    } else {
+      s.textContent='';
+    }
+  }
+  if(flashCorrupt && slots[Math.max(0,buffer.length-1)]){
+    slots[Math.max(0,buffer.length-1)].classList.add('corrupt');
+  }
+  document.getElementById('bufCount').textContent = buffer.length;
+}
+
+function showBanner(type, text){
+  bannerEl.className = 'banner show ' + type;
+  bannerEl.textContent = text;
+  clearTimeout(showBanner._t);
+  showBanner._t = setTimeout(()=>{ bannerEl.className='banner'; }, 1400);
+}
+
+function isRace(){ return document.getElementById('raceToggle').checked; }
+
+function producerStep(){
+  if(downloadedCount >= TOTAL) return;
+  const raceMode = isRace();
+
+  if(buffer.length >= BUF_MAX){
+    fullEvents++; document.getElementById('statFull').textContent = fullEvents;
+    prodStatus.textContent = '⛔ Buffer FULL — waiting...';
+    showBanner('full', '🚫 BUFFER FULL — producer blocked');
+    log('[Producer] BUFFER FULL! waiting for free slot', 'p');
+    return; // blocked, try again next tick
+  }
+
+  const chunk = nextId++;
+  if(raceMode){
+    // simulate unsynchronized read-modify-write
+    const temp = unsafeCounter;
+    unsafeCounter = temp + 1;
+    buffer.push(chunk);
+    if(buffer.length !== unsafeCounter){
+      raceEvents++; document.getElementById('statRace').textContent = raceEvents;
+      log(`[RACE] Producer corrupted state! buffer.length=${buffer.length} but counter=${unsafeCounter}`, 'r');
+      showBanner('race', '⚠️ RACE CONDITION DETECTED');
+      renderSlots(true);
+    }
+  } else {
+    buffer.push(chunk);
+  }
+  downloadedCount++;
+  document.getElementById('statProd').textContent = downloadedCount;
+  prodStatus.textContent = `Downloaded chunk #${chunk}`;
+  log(`[Producer] Downloaded #${chunk} -> buffer ${buffer.length}/${BUF_MAX}`, 'p');
+  renderSlots(false);
+}
+
+function consumerStep(){
+  if(playedCount >= TOTAL) return;
+  const raceMode = isRace();
+
+  if(buffer.length === 0){
+    emptyEvents++; document.getElementById('statEmpty').textContent = emptyEvents;
+    consStatus.textContent = '⏳ Buffering...';
+    showBanner('empty', '⏳ BUFFER EMPTY — consumer buffering');
+    log('[Consumer] BUFFER EMPTY! buffering...', 'c');
+    return;
+  }
+
+  const chunk = buffer.shift();
+  if(raceMode){
+    const temp = unsafeCounter;
+    unsafeCounter = temp - 1;
+    if(buffer.length !== unsafeCounter){
+      raceEvents++; document.getElementById('statRace').textContent = raceEvents;
+      log(`[RACE] Consumer corrupted state! buffer.length=${buffer.length} but counter=${unsafeCounter}`, 'r');
+      showBanner('race', '⚠️ RACE CONDITION DETECTED');
+      renderSlots(true);
+    }
+  }
+  playedCount++;
+  document.getElementById('statCons').textContent = playedCount;
+  consStatus.textContent = `▶ Playing #${chunk}`;
+  log(`[Consumer] Playing #${chunk} (${playedCount}/${TOTAL})`, 'c');
+  renderSlots(false);
+
+  if(playedCount >= TOTAL){
+    log('✅ Streaming session complete.', 'c');
+    stop();
+  }
+}
+
+let tick = 0;
+function loop(){
+  const speed = +document.getElementById('speed').value;
+  tick++;
+  // producer runs every tick, consumer every (4-speed) ticks -> adjustable pacing
+  producerStep();
+  if(tick % (speed) === 0) consumerStep();
+  if(downloadedCount >= TOTAL && buffer.length===0) stop();
+}
+
+function start(){
+  if(running) return;
+  running = true;
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('pauseBtn').disabled = false;
+  timer = setInterval(loop, 550);
+}
+function stop(){
+  running = false;
+  clearInterval(timer);
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('pauseBtn').disabled = true;
+}
+function reset(){
+  stop();
+  buffer=[]; nextId=1; playedCount=0; downloadedCount=0; tick=0; unsafeCounter=0;
+  fullEvents=0; emptyEvents=0; raceEvents=0;
+  ['statProd','statCons','statFull','statEmpty','statRace'].forEach(id=>document.getElementById(id).textContent='0');
+  prodStatus.textContent='Idle — click Start';
+  consStatus.textContent='Idle — click Start';
+  logEl.innerHTML='';
+  renderSlots(false);
+}
+
+document.getElementById('startBtn').onclick = start;
+document.getElementById('pauseBtn').onclick = stop;
+document.getElementById('resetBtn').onclick = reset;
+
+renderSlots(false);
+</script>
+</body>
+</html>
